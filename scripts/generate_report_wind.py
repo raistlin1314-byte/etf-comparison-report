@@ -211,10 +211,12 @@ def fetch_etf_shares_weekly(windcode):
                     cn = c.replace("_支持历史", "")
                     if "时间" in cn or "日期" in cn:
                         date_col = i
+                        break
                 for i, c in enumerate(cols):
                     cn = c.replace("_支持历史", "")
                     if "份额" in cn and "REITS" not in cn and "未流通" not in cn and "时间" not in cn and "日期" not in cn:
                         shares_col = i
+                        break
                 # 回退到位置推断
                 if shares_col is None:
                     shares_col = 2 if len(row) > 2 else -1
