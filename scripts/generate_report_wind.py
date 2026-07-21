@@ -90,8 +90,10 @@ def wind_call(server_type, tool_name, params_dict):
     cmd = ["node", "scripts/cli.mjs", "call", server_type, tool_name, params_json]
     
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True,
-                               encoding='utf-8', cwd=WIND_SKILL_DIR, timeout=30)
+        result = subprocess.run(cmd, capture_output=True,
+                               cwd=WIND_SKILL_DIR, timeout=30)
+        result.stdout = result.stdout.decode("utf-8", errors="replace") if result.stdout else ""
+        result.stderr = result.stderr.decode("utf-8", errors="replace") if result.stderr else ""
     except subprocess.TimeoutExpired:
         print(f"  [WARN] Wind call timeout: {server_type}/{tool_name}")
         return None
