@@ -7,15 +7,11 @@
 依赖：python3, requests (仅用于下载Chart.js)
 """
 
-import io
-import json, os, sys, re, subprocess, shutil
-from datetime import datetime, date, timedelta
+import os, sys
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
-# Force UTF-8 output to prevent GBK encoding errors on Windows
-if hasattr(sys.stdout, 'buffer'):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-if hasattr(sys.stderr, 'buffer'):
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+import json, re, subprocess, shutil
+from datetime import datetime, date, timedelta
 
 WIND_SKILL_DIR = r"C:\Users\frank\.agents\skills\wind-mcp-skill"
 REPORT_REPO_DIR = r"C:\Users\frank\.openclaw-tdxclaw\.openclaw-tdxclaw\workspace\report-repo"
@@ -488,7 +484,7 @@ def generate_html(data, output_path):
         f.write(new_content)
 
     print(f"\n{'='*60}")
-    print(f"✅ 报告已生成: {output_path}")
+    print(f"[OK] 报告已生成: {output_path}")
     print(f"📅 数据范围: {data['start']} ~ {data['end']}")
     total = sum(len(c["rows"]) for c in data["categories"].values())
     print(f"📊 总数据行: {total}")
@@ -526,13 +522,13 @@ def git_push_to_github(repo_dir, commit_msg):
         err = (push_result.stderr or b"").decode("utf-8", errors="replace")
         
         if push_result.returncode == 0:
-            print(f"  [Git] ✅ 已推送到GitHub: {out[:100]}{err[:100]}")
+            print(f"  [Git] [OK] 已推送到GitHub: {out[:100]}{err[:100]}")
             return True
         else:
-            print(f"  [Git] ⚠️ push失败(code={push_result.returncode}): {err[:200]}")
+            print(f"  [Git] [WARN] push失败(code={push_result.returncode}): {err[:200]}")
             return False
     except Exception as e:
-        print(f"  [Git] ❌ 自动推送失败: {e}")
+        print(f"  [Git] [FAIL] 自动推送失败: {e}")
         print(f"  请手动: cd {repo_dir} && git add -A && git commit -m \"{commit_msg}\" && git push")
         return False
 
