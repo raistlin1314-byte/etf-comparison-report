@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 指数ETF滑动对比周报生成器 — Wind数据源版
 ==============================================
@@ -7,15 +7,20 @@
 依赖：python3, requests (仅用于下载Chart.js)
 """
 
+import io
 import json, os, sys, re, subprocess, shutil
 from datetime import datetime, date, timedelta
 
-# ============================================================
-# 配置
-# ============================================================
+# Force UTF-8 output to prevent GBK encoding errors on Windows
+if hasattr(sys.stdout, 'buffer'):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, 'buffer'):
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
 WIND_SKILL_DIR = r"C:\Users\frank\.agents\skills\wind-mcp-skill"
-OUTPUT_DIR = r"C:\Users\frank\.openclaw-tdxclaw\.openclaw\workspace-tdxclaw\reports"
-SEED_HTML = os.path.join(OUTPUT_DIR, "index.html")  # 始终读最新的
+REPORT_REPO_DIR = r"C:\Users\frank\.openclaw-tdxclaw\.openclaw-tdxclaw\workspace\report-repo"
+SEED_HTML = os.path.join(REPORT_REPO_DIR, "index.html")
+OUTPUT_DIR = r"C:\Users\frank\.openclaw-tdxclaw\workspace\reports"
 
 # 6个板块 - windcode 用 Wind 标准代码
 CATEGORIES_CONFIG = [
@@ -201,14 +206,17 @@ def fetch_etf_shares_weekly(windcode):
                         pass
             else:
                 # Format A: [code, name, shares, date_str, ...]
-                # 找出数值列（份额）和日期列
-                shares_col = date_col = None
+                # 先找日期列（含"时间"），再找份额列（含"份额"但不含"时间"）
+                date_col = None
+                shares_col = None
                 for i, c in enumerate(cols):
                     cn = c.replace("_支持历史", "")
-                    if "份额" in cn and "REITS" not in cn and "未流通" not in cn:
-                        shares_col = i
-                    if "时间" in cn:
+                    if "时间" in cn or "日期" in cn:
                         date_col = i
+                for i, c in enumerate(cols):
+                    cn = c.replace("_支持历史", "")
+                    if "份额" in cn and "REITS" not in cn and "未流通" not in cn and "时间" not in cn and "日期" not in cn:
+                        shares_col = i
                 # 回退到位置推断
                 if shares_col is None:
                     shares_col = 2 if len(row) > 2 else -1
@@ -221,9 +229,15 @@ def fetch_etf_shares_weekly(windcode):
                     except (ValueError, TypeError):
                         shares = None
                 if date_col >= 0 and date_col < len(row):
-                    date_str = str(row[date_col]) if row[date_col] is not None else None
+                    raw_date = str(row[date_col]) if row[date_col] is not None else None
+                    # Normalize date to YYYYMMDD (Wind returns both 20250727 and 2025-07-20)
+                    date_str = None
+                    if raw_date:
+                        m = re.match(r'^(\d{4})-?(\d{2})-?(\d{2})', raw_date)
+                        if m:
+                            date_str = m.group(1) + m.group(2) + m.group(3)
             
-            if shares is not None and date_str and re.match(r"^\d{8}$", date_str):
+            if shares is not None and date_str and re.match(r"^(\d{8}|\d{4}-\d{2}-\d{2})$", date_str):
                 result[date_str] = shares
     
     if not result:
@@ -563,16 +577,17 @@ def main():
     print(f"  同步: {index_path}")
 
     # 4. GitHub自动推送
-    GITHUB_REPO_DIR = os.path.join(os.path.dirname(OUTPUT_DIR), "report-repo")
-    if os.path.exists(os.path.join(GITHUB_REPO_DIR, ".git")):
+    
+    if os.path.exists(os.path.join(REPORT_REPO_DIR, ".git")):
         print(f"\n[4/4] 部署到GitHub...")
         # 复制index.html到report-repo
-        shutil.copy2(index_path, os.path.join(GITHUB_REPO_DIR, "index.html"))
+        shutil.copy2(index_path, os.path.join(REPORT_REPO_DIR, "index.html"))
         commit_msg = f"ETF周报自动更新 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-        git_push_to_github(GITHUB_REPO_DIR, commit_msg)
+        git_push_to_github(REPORT_REPO_DIR, commit_msg)
     else:
         print(f"\n[4/4] 跳过 - 未找到report-repo")
 
 
 if __name__ == "__main__":
     main()
+
