@@ -7,14 +7,19 @@
 依赖：python3, requests (仅用于下载Chart.js)
 """
 
-import os, sys
+import os, sys, io
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+# 强制 UTF-8 输出（防止 Windows GBK 编码错误）
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+else:
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 import json, re, subprocess, shutil
 from datetime import datetime, date, timedelta
 
 WIND_SKILL_DIR = r"C:\Users\frank\.agents\skills\wind-mcp-skill"
-REPORT_REPO_DIR = r"C:\Users\frank\.openclaw-tdxclaw\.openclaw-tdxclaw\workspace\report-repo"
+REPORT_REPO_DIR = r"C:\Users\frank\.openclaw-tdxclaw\workspace\report-repo"
 SEED_HTML = os.path.join(REPORT_REPO_DIR, "index.html")
 OUTPUT_DIR = r"C:\Users\frank\.openclaw-tdxclaw\workspace\reports"
 
@@ -150,17 +155,18 @@ def fetch_index_kline_wind(index_wind, start_date, end_date):
     if isinstance(inner, dict):
         rows = inner.get("rows", [])
         cols = [c["name"] for c in inner.get("columns", [])]
-        # 找到DATE和MATCH的列索引
-        date_idx = next((i for i, n in enumerate(cols) if n in ("_DATE", "DATE")), -1)
+        # 找到日期和MATCH的列索引
+        date_idx = next((i for i, n in enumerate(cols) if n in ("_DATE", "DATE", "TIME")), -1)
         close_idx = next((i for i, n in enumerate(cols) if n == "MATCH"), -1)
         
         for row in rows:
             if date_idx >= 0 and close_idx >= 0 and len(row) > max(date_idx, close_idx):
                 date_str = str(row[date_idx])
                 close = float(row[close_idx])
-                # date_str 可能是 "20260518" 或 "2026-05-18T00:00:00..."
-                if len(date_str) >= 8 and date_str[:8].isdigit():
-                    result[date_str[:8]] = close
+                # date_str 可能是 "20260518"、"2026-05-18T00:00:00..." 或 "2026-05-18"
+                m = re.match(r'^(\d{4})-?(\d{2})-?(\d{2})', date_str)
+                if m:
+                    result[m.group(1) + m.group(2) + m.group(3)] = close
     
     return result
 
