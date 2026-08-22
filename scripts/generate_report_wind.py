@@ -95,7 +95,7 @@ def wind_call(server_type, tool_name, params_dict):
     cmd = ["node", "scripts/cli.mjs", "call", server_type, tool_name, params_json]
     
     try:
-        result = subprocess.run(cmd, capture_output=True,
+        result = subprocess.run(cmd, capture_output=True, text=False,
                                cwd=WIND_SKILL_DIR, timeout=30)
         result.stdout = result.stdout.decode("utf-8", errors="replace") if result.stdout else ""
         result.stderr = result.stderr.decode("utf-8", errors="replace") if result.stderr else ""
@@ -508,19 +508,19 @@ def git_push_to_github(repo_dir, commit_msg):
         # 检查是否有变更
         result = subprocess.run(
             ["git", "status", "--porcelain"],
-            capture_output=True, text=True, cwd=repo_dir, timeout=10
+            capture_output=True, text=False, cwd=repo_dir, timeout=10
         )
-        if not result.stdout.strip():
+        if not (result.stdout or b"").decode("utf-8", errors="replace").strip():
             print("  [Git] 没有变更需要提交")
             return True
         
         # git add (stderr可能含非UTF-8，丢弃)
-        subprocess.run(["git", "add", "-A"], cwd=repo_dir, timeout=15, 
+        subprocess.run(["git", "add", "-A"], cwd=repo_dir, timeout=15,
                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        
-        # git commit (stderr可能含非UTF-8)
-        subprocess.run(["git", "commit", "-m", commit_msg], 
-                      capture_output=True, text=True, 
+
+        # git commit (二进制模式避免GBK编码异常)
+        subprocess.run(["git", "commit", "-m", commit_msg],
+                      capture_output=True, text=False,
                       cwd=repo_dir, timeout=15)
         
         # git push - 用二进制模式避免GBK编码异常
@@ -528,8 +528,8 @@ def git_push_to_github(repo_dir, commit_msg):
             ["git", "push", "origin", "main"],
             capture_output=True, text=False, cwd=repo_dir, timeout=60
         )
-        out = (push_result.stdout or b"").decode("utf-8", errors="replace")
-        err = (push_result.stderr or b"").decode("utf-8", errors="replace")
+        out = (push_result.stdout or b"").decode("utf-8", errors="replace") if push_result.stdout else ""
+        err = (push_result.stderr or b"").decode("utf-8", errors="replace") if push_result.stderr else ""
         
         if push_result.returncode == 0:
             print(f"  [Git] [OK] 已推送到GitHub: {out[:100]}{err[:100]}")
