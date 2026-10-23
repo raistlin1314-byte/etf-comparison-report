@@ -1,15 +1,15 @@
 ﻿#!/usr/bin/env python3
 """
-指数ETF滑动对比周报生成器 — Wind数据源版
+指数ETF滑动对比周报生成器 - Wind数据源版
 ==============================================
-数据源：万得Wind MCP CLI（通过 subprocess 调用）
-布局：与离线单文件HTML相同，仅替换数据源
-依赖：python3, requests (仅用于下载Chart.js)
+数据源:万得Wind MCP CLI(通过 subprocess 调用)
+布局:与离线单文件HTML相同,仅替换数据源
+依赖:python3, requests (仅用于下载Chart.js)
 """
 
 import os, sys, io
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
-# 强制 UTF-8 输出（防止 Windows GBK 编码错误）
+# 强制 UTF-8 输出(防止 Windows GBK 编码错误)
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 else:
@@ -86,14 +86,14 @@ CATEGORIES_CONFIG = [
 _WIND_CACHE = {}
 
 def wind_call(server_type, tool_name, params_dict):
-    """调用 Wind MCP CLI，返回解析后的 data 对象或 None"""
+    """调用 Wind MCP CLI,返回解析后的 data 对象或 None"""
     cache_key = f"{server_type}/{tool_name}/{json.dumps(params_dict, ensure_ascii=False, sort_keys=True)}"
     if cache_key in _WIND_CACHE:
         return _WIND_CACHE[cache_key]
 
     params_json = json.dumps(params_dict, ensure_ascii=False)
     cmd = ["node", "scripts/cli.mjs", "call", server_type, tool_name, params_json]
-    
+
     try:
         result = subprocess.run(cmd, capture_output=True, text=False,
                                cwd=WIND_SKILL_DIR, timeout=30)
@@ -137,16 +137,16 @@ def fetch_index_kline_wind(index_wind, start_date, end_date):
     """
     从Wind获取指数日K线
     返回: {date_str: close_price}
-    Wind get_index_kline 返回平铺格式：data.{columns, rows}
-    (注意：不是标准的result-sets格式)
+    Wind get_index_kline 返回平铺格式:data.{columns, rows}
+    (注意:不是标准的result-sets格式)
     """
     data = wind_call("index_data", "get_index_kline", {
         "windcode": index_wind,
         "begin_date": start_date.replace("-", ""),
         "end_date": end_date.replace("-", ""),
-        "period": "10"  # 日K
+        "period": "1d"  # 日K（Wind CLI 公开枚举为 1d/1w/1mo…；"10" 是内部后端码，会被 PARAM_VALIDATION_ERROR 拒绝）
     })
-    
+
     result = {}
     if data is None:
         return result
@@ -158,7 +158,7 @@ def fetch_index_kline_wind(index_wind, start_date, end_date):
         # 找到日期和MATCH的列索引
         date_idx = next((i for i, n in enumerate(cols) if n in ("_DATE", "DATE", "TIME")), -1)
         close_idx = next((i for i, n in enumerate(cols) if n == "MATCH"), -1)
-        
+
         for row in rows:
             if date_idx >= 0 and close_idx >= 0 and len(row) > max(date_idx, close_idx):
                 date_str = str(row[date_idx])
@@ -167,13 +167,53 @@ def fetch_index_kline_wind(index_wind, start_date, end_date):
                 m = re.match(r'^(\d{4})-?(\d{2})-?(\d{2})', date_str)
                 if m:
                     result[m.group(1) + m.group(2) + m.group(3)] = close
-    
+
     return result
+
+
+def _normalize_shares_to_wanfen(raw_value, col_name="", prev_scale_hint=None):
+    """
+    将 Wind 返回的份额值统一归一到「万份」。
+
+    背景（2026-10-23 修复）：
+      - get_fund_performance 的周度份额是「万份」（如 3,097,998.74）
+      - analytics_data/get_financial_data 的「最新基金份额」是「份」（如 31,075,987,400）
+      两者相差 10000 倍。历史 bug 就是把「份」当「万份」写入，导致图表右轴飚到 1e10。
+
+    判据（按优先级）：
+      1. 显式单位提示：列名/单位标注含「亿」→ 该值单位为亿份，×1e8 → 万份
+      2. 量级判据：值 > 1e8 视为「份」，÷1e4 → 万份
+         （ETF 份额几乎不可能超过 1000 亿份=1e11 份；1e8 万份=1000亿份已属极端）
+      3. 与上一期量级对比：若 prev 在万份量级（1e5~1e7）而当前 >1e8 → 判定为「份」
+    """
+    if raw_value is None:
+        return None
+    try:
+        v = float(raw_value)
+    except (ValueError, TypeError):
+        return None
+    if v <= 0:
+        return None
+
+    # 1) 列名/单位显式标注「亿」
+    if col_name and "亿" in col_name:
+        return v * 1e8 / 1e4  # 亿份 -> 万份
+
+    # 2) 量级判据：>1e8 视为「份」
+    if v > 1e8:
+        return v / 1e4
+
+    # 3) 与上期对比
+    if prev_scale_hint and prev_scale_hint > 0:
+        if v > prev_scale_hint * 1000 and v > 1e8:
+            return v / 1e4
+
+    return v
 
 
 def fetch_etf_shares_weekly(windcode):
     """
-    从Wind获取ETF近52周周度份额（万份）
+    从Wind获取ETF近52周周度份额（统一为「万份」）
     处理多种列格式：
       Format A: [code, name, shares, date_str, ...]
       Format B: [year, week, shares, reits_shares, reits_unissued, ...]
@@ -230,10 +270,11 @@ def fetch_etf_shares_weekly(windcode):
                     date_col = 3 if len(row) > 3 else -1
                 
                 if shares_col >= 0 and shares_col < len(row):
-                    try:
-                        shares = float(row[shares_col]) if row[shares_col] is not None else None
-                    except (ValueError, TypeError):
-                        shares = None
+                    raw = row[shares_col]
+                    if raw is not None:
+                        shares = _normalize_shares_to_wanfen(
+                            raw, col_name=cols[shares_col] if shares_col < len(cols) else ""
+                        )
                 if date_col >= 0 and date_col < len(row):
                     raw_date = str(row[date_col]) if row[date_col] is not None else None
                     # Normalize date to YYYYMMDD (Wind returns both 20250727 and 2025-07-20)
@@ -254,14 +295,20 @@ def fetch_etf_shares_weekly(windcode):
             "lang": "CNS"
         })
         for ds in get_result_sets(data2):
+            cols2 = [c["name"] for c in ds.get("columns", [])]
+            # 必须按列名取「份额」列，禁止按行位置硬取第3列
+            si = next((i for i, c in enumerate(cols2) if "份额" in c), None)
+            if si is None:
+                continue
             for row in ds.get("rows", []):
-                if len(row) >= 3 and row[2]:
-                    shares = float(row[2])
+                if len(row) > si and row[si] is not None:
                     today = date.today().strftime("%Y%m%d")
-                    result[today] = shares
-                    print(f"    回退方案: 最新份额={shares:.0f}万份 (日期={today})")
+                    wan = _normalize_shares_to_wanfen(row[si], col_name=cols2[si])
+                    if wan:
+                        result[today] = wan
+                        print(f"    回退方案: 最新份额={wan:.0f}万份 (日期={today})")
                     break
-    
+
     return result
 
 
@@ -270,7 +317,7 @@ def fetch_etf_latest_info(windcode):
     从Wind获取ETF最新规模/净值信息
     返回: {shares_wanfen, scale_yi, nav, name}
     """
-    # 方式1：get_fund_info 拿档案（含规模和净值）
+    # 方式1:get_fund_info 拿档案(含规模和净值)
     data = wind_call("fund_data", "get_fund_info", {
         "question": f"{windcode}基金档案",
         "lang": "中文"
@@ -290,16 +337,24 @@ def fetch_etf_latest_info(windcode):
             if len(row) >= 2:
                 info["name"] = str(row[1])
 
-    # 方式2：analytics_data 拿最新份额（万份）
+    # 方式2：analytics_data 拿最新份额
+    # ⚠️ 该接口返回单位是「份」，必须归一到「万份」（见 _normalize_shares_to_wanfen）
     data2 = wind_call("analytics_data", "get_financial_data", {
         "question": f"{windcode}最新基金份额",
         "lang": "CNS"
     })
     for ds in get_result_sets(data2):
+        cols = [c["name"] for c in ds.get("columns", [])]
+        si = next((i for i, c in enumerate(cols) if "份额" in c), None)
+        if si is None:
+            continue
         for row in ds.get("rows", []):
-            if len(row) >= 3 and row[2]:
-                info["shares"] = float(row[2])  # 已在万份单位
-    
+            if len(row) > si and row[si] is not None:
+                wan = _normalize_shares_to_wanfen(row[si], col_name=cols[si])
+                if wan:
+                    info["shares"] = wan  # 万份
+                break
+
     return info
 
 
@@ -334,17 +389,47 @@ def parse_seed_html(html_path):
     return json.loads(json_str)
 
 
+def sanitize_seed_shares(seed_data):
+    """
+    归一种子数据中所有 ETF 份额序列到「万份」。
+
+    背景（2026-10-23）：历史回退路径把「份」当「万份」写入，
+    造成 A500 板块出现 3.07e10 级别的异常值（右轴飙到百亿）。
+    判据：ETF 份额不可能超过 1000 亿份 = 1e11 份 = 1e7 万份，
+    因此 >1e8 一律视为「份」，÷1e4 归一。
+    """
+    fixed = 0
+    for cat_name, cat in seed_data.get("categories", {}).items():
+        for row in cat.get("rows", []):
+            etfs = row.get("etfs")
+            if not isinstance(etfs, list):
+                continue
+            for i, v in enumerate(etfs):
+                if v is None:
+                    continue
+                try:
+                    fv = float(v)
+                except (ValueError, TypeError):
+                    continue
+                if fv > 1e8:
+                    etfs[i] = round(fv / 1e4, 4)
+                    fixed += 1
+    if fixed:
+        print(f"  [数据自愈] 归一 {fixed} 个异常份额值（份 → 万份）")
+    return seed_data
+
+
 def merge_data_with_wind(seed_data):
     """
     通过Wind补充最新数据到种子数据中。
-    策略：对每个板块：
-      1. 从Wind获取指数日K线（最近一个月）
-      2. 从Wind获取ETF周度份额（最近一年）
-      3. 合并新交易日到种子数据中，用最近的周度份额填充
+    策略:对每个板块:
+      1. 从Wind获取指数日K线(最近一个月)
+      2. 从Wind获取ETF周度份额(最近一年)
+      3. 合并新交易日到种子数据中,用最近的周度份额填充
     """
     today = date.today()
     today_str = today.strftime("%Y%m%d")
-    
+
     # 对每个ETF预取周度份额
     etf_weekly_cache = {}
     print("\n  预取ETF周度份额数据...")
@@ -374,10 +459,10 @@ def merge_data_with_wind(seed_data):
         fetch_start = datetime.strptime(last_seed_date, "%Y%m%d") - timedelta(days=5)
         fetch_start_str = fetch_start.strftime("%Y%m%d")
         fetch_end = today
-        
+
         # 获取Wind指数K线
         index_daily = fetch_index_kline_wind(
-            cat_cfg["index_wind"], 
+            cat_cfg["index_wind"],
             fetch_start.strftime("%Y-%m-%d"),
             fetch_end.strftime("%Y-%m-%d")
         )
@@ -385,7 +470,7 @@ def merge_data_with_wind(seed_data):
             print(f"  [跳过] 无法获取K线数据")
             continue
 
-        # 筛选新交易日（从种子最后日期之后）
+        # 筛选新交易日(从种子最后日期之后)
         new_dates = sorted([d for d in index_daily if d > last_seed_date])
         if not new_dates:
             print(f"  [无需更新]")
@@ -415,7 +500,7 @@ def merge_data_with_wind(seed_data):
             idx_close = index_daily.get(dt)
             if idx_close is None:
                 continue
-            
+
             # 使用该日期前最近的份额数据
             etf_shares = []
             for i, etf_cfg in enumerate(cat_cfg["etfs"]):
@@ -463,10 +548,10 @@ def merge_data_with_wind(seed_data):
 
 
 # ============================================================
-# HTML生成（与原来完全一致）
+# HTML生成(与原来完全一致)
 # ============================================================
 def generate_html(data, output_path):
-    """生成更新后的HTML，保持原布局和展现方式"""
+    """生成更新后的HTML,保持原布局和展现方式"""
     if not os.path.exists(SEED_HTML):
         print(f"[ERROR] 种子HTML不存在: {SEED_HTML}")
         return False
@@ -513,8 +598,8 @@ def git_push_to_github(repo_dir, commit_msg):
         if not (result.stdout or b"").decode("utf-8", errors="replace").strip():
             print("  [Git] 没有变更需要提交")
             return True
-        
-        # git add (stderr可能含非UTF-8，丢弃)
+
+        # git add (stderr可能含非UTF-8,丢弃)
         subprocess.run(["git", "add", "-A"], cwd=repo_dir, timeout=15,
                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -522,7 +607,7 @@ def git_push_to_github(repo_dir, commit_msg):
         subprocess.run(["git", "commit", "-m", commit_msg],
                       capture_output=True, text=False,
                       cwd=repo_dir, timeout=15)
-        
+
         # git push - 用二进制模式避免GBK编码异常
         push_result = subprocess.run(
             ["git", "push", "origin", "main"],
@@ -530,7 +615,7 @@ def git_push_to_github(repo_dir, commit_msg):
         )
         out = (push_result.stdout or b"").decode("utf-8", errors="replace") if push_result.stdout else ""
         err = (push_result.stderr or b"").decode("utf-8", errors="replace") if push_result.stderr else ""
-        
+
         if push_result.returncode == 0:
             print(f"  [Git] [OK] 已推送到GitHub: {out[:100]}{err[:100]}")
             return True
@@ -550,7 +635,7 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     print("=" * 60)
-    print("  指数ETF滑动对比周报生成器（Wind数据源版）")
+    print("  指数ETF滑动对比周报生成器(Wind数据源版)")
     print(f"  {'='*56}")
     print(f"  运行时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
@@ -560,10 +645,12 @@ def main():
     seed_data = parse_seed_html(SEED_HTML)
     if not seed_data:
         sys.exit(1)
+    # 数据自愈：归一历史污染的单位（份 → 万份）
+    seed_data = sanitize_seed_shares(seed_data)
     print(f"  数据区间: {seed_data['start']} ~ {seed_data['end']}")
     print(f"  板块: {', '.join(seed_data['categories'].keys())}")
 
-    # 2. 合并新数据（Wind）
+    # 2. 合并新数据(Wind)
     print("\n[2/3] 通过Wind获取最新数据...")
     updated_data = merge_data_with_wind(seed_data)
 
@@ -583,7 +670,7 @@ def main():
     print(f"  同步: {index_path}")
 
     # 4. GitHub自动推送
-    
+
     if os.path.exists(os.path.join(REPORT_REPO_DIR, ".git")):
         print(f"\n[4/4] 部署到GitHub...")
         # 复制index.html到report-repo
