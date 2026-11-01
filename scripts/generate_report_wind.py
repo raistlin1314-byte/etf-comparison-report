@@ -316,6 +316,12 @@ def fetch_etf_latest_info(windcode):
     """
     从Wind获取ETF最新规模/净值信息
     返回: {shares_wanfen, scale_yi, nav, name}
+
+    ⚠️ 口径纪律（Layer 1.55 核验 #470）：
+      - 「基金规模合计」= Wind 总规模口径（含联接基金），非纯场内规模
+      - 「最新基金份额」= Wind 份额字段，已证实可能为总份额（510050 案例：
+        69.39亿份 × 净值2.86 ≈ 198亿 ≠ Wind自标360.57亿，内部不自洽）
+      - 报告展示「规模」必须标注口径，跨源对比前先做自洽性验证
     """
     # 方式1:get_fund_info 拿档案(含规模和净值)
     data = wind_call("fund_data", "get_fund_info", {
@@ -329,7 +335,9 @@ def fetch_etf_latest_info(windcode):
             if "基金规模合计" in cols:
                 idx_scale = cols.index("基金规模合计")
                 scale_yi = float(row[idx_scale]) if row[idx_scale] else 0
+                # 口径标注：Wind「基金规模合计」= 总规模（场内+联接基金）
                 info["scale_yi"] = scale_yi
+                info["scale_scope"] = "total"  # total=总规模(含联接), 区别于场内规模
             if "单位净值" in cols:
                 idx_nav = cols.index("单位净值")
                 nav = float(row[idx_nav]) if row[idx_nav] else 0
@@ -543,6 +551,20 @@ def merge_data_with_wind(seed_data):
                 seed_cat["etfs"][i]["share_yi"] = round(info["shares"] / 10000, 2)
             if info.get("scale_yi"):
                 seed_cat["etfs"][i]["size_yi"] = round(info["scale_yi"], 2)
+                # 口径标注（Layer 1.55 #470）：规模来源口径
+                seed_cat["etfs"][i]["size_scope"] = info.get("scale_scope", "total")
+                # 自洽性校验：份额 × 净值 ≈ 规模（容差 15%，超出则告警）
+                sh = seed_cat["etfs"][i].get("share_yi")
+                nav = info.get("nav")
+                if sh and nav:
+                    implied = sh * nav
+                    if implied > 0:
+                        dev = abs(info["scale_yi"] - implied) / implied
+                        seed_cat["etfs"][i]["size_selfcheck_dev"] = round(dev, 4)
+                        if dev > 0.15:
+                            print(f"  [口径告警] {etf_cfg['windcode']} 规模自洽性偏差 {dev*100:.1f}% "
+                                  f"(Wind规模 {info['scale_yi']:.2f}亿 vs 份额×净值 {implied:.2f}亿) "
+                                  f"→ 疑为份额口径错配（总份额 vs 场内份额）")
 
     return seed_data
 
